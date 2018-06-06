@@ -28,7 +28,7 @@ namespace ManagedCodeGen
             private int _count = 5;
             private string _json;
             private string _tsv;
-            private bool _reconcile = true;
+            private bool _noreconcile = false;
 
             public Config(string[] args)
             {
@@ -44,6 +44,8 @@ namespace ManagedCodeGen
                     syntax.DefineOption("w|warn", ref _warn,
                         "Generate warning output for files/methods that only "
                       + "exists in one dataset or the other (only in base or only in diff).");
+                    syntax.DefineOption("noreconcile", ref _noreconcile,
+                        "Do not reconcile unique methods in base/diff");
                     syntax.DefineOption("json", ref _json,
                         "Dump analysis data to specified file in JSON format.");
                     syntax.DefineOption("tsv", ref _tsv,
@@ -77,7 +79,7 @@ namespace ManagedCodeGen
             public string JsonFileName { get { return _json; } }
             public bool DoGenerateJson { get { return _json != null; } }
             public bool DoGenerateTSV { get { return _tsv != null; } }
-            public bool Reconcile { get { return _reconcile; } }
+            public bool Reconcile { get { return !_noreconcile; } }
         }
 
         public class FileInfo
@@ -154,6 +156,7 @@ namespace ManagedCodeGen
             public int reconciledCountBase;
             public int reconciledBytesDiff;
             public int reconciledCountDiff;
+            public int methodsInBoth;
             public IEnumerable<MethodInfo> methodsOnlyInBase;
             public IEnumerable<MethodInfo> methodsOnlyInDiff;
             public IEnumerable<MethodDelta> methodDeltaList;
@@ -306,6 +309,7 @@ namespace ManagedCodeGen
                     baseBytes = jointList.Sum(x => x.baseBytes),
                     diffBytes = jointList.Sum(x => x.diffBytes),
                     deltaBytes = jointList.Sum(x => x.deltaBytes),
+                    methodsInBoth = jointList.Count(),
                     methodsOnlyInBase = b.methodList.Except(d.methodList, methodInfoComparer),
                     methodsOnlyInDiff = d.methodList.Except(b.methodList, methodInfoComparer),
                     methodDeltaList = jointList.Where(x => x.deltaBytes != 0)
@@ -361,6 +365,7 @@ namespace ManagedCodeGen
             int fileImprovementCount = sortedFileImprovements.Count();
             int fileRegressionCount = sortedFileRegressions.Count();
             int sortedFileCount = fileImprovementCount + fileRegressionCount;
+            int unchangedFileCount = fileDeltaList.Count() - sortedFileCount;
 
             if (fileRegressionCount > 0)
             {
@@ -384,8 +389,8 @@ namespace ManagedCodeGen
                 }
             }
 
-            Console.WriteLine("\n{0} total files with size differences ({1} improved, {2} regressed).",
-                sortedFileCount, fileImprovementCount, fileRegressionCount);
+            Console.WriteLine("\n{0} total files with size differences ({1} improved, {2} regressed), {3} unchanged.",
+                sortedFileCount, fileImprovementCount, fileRegressionCount, unchangedFileCount);
 
             var methodDeltaList = fileDeltaList
                                         .SelectMany(fd => fd.methodDeltaList, (fd, md) => new
@@ -393,7 +398,10 @@ namespace ManagedCodeGen
                                             path = fd.path,
                                             name = md.name,
                                             deltaBytes = md.deltaBytes,
-                                            count = md.baseOffsets != null ? md.baseOffsets.Count() : 1
+                                            baseBytes = md.baseBytes,
+                                            diffBytes = md.diffBytes,
+                                            baseCount = md.baseOffsets == null ? 0 : md.baseOffsets.Count(),
+                                            diffCount = md.diffOffsets == null ? 0 : md.diffOffsets.Count()
                                         }).ToList();
             var sortedMethodImprovements = methodDeltaList
                                             .Where(x => x.deltaBytes < 0)
@@ -404,6 +412,7 @@ namespace ManagedCodeGen
             int methodImprovementCount = sortedMethodImprovements.Count();
             int methodRegressionCount = sortedMethodRegressions.Count();
             int sortedMethodCount = methodImprovementCount + methodRegressionCount;
+            int unchangedMethodCount = fileDeltaList.Sum(x => x.methodsInBoth) - sortedMethodCount;
 
             if (methodRegressionCount > 0)
             {
@@ -412,10 +421,19 @@ namespace ManagedCodeGen
                 foreach (var method in sortedMethodRegressions.GetRange(0, Math.Min(methodRegressionCount, requestedCount)))
                 {
                     Console.Write("    {2,8} : {0} - {1}", method.path, method.name, method.deltaBytes);
-                    if (method.count > 1)
+
+                    if (method.baseCount == method.diffCount)
                     {
-                        Console.Write(" ({0} methods)", method.count);
+                        if (method.baseCount > 1)
+                        {
+                            Console.Write(" ({0} methods)", method.baseCount);
+                        }
                     }
+                    else
+                    {
+                        Console.Write(" ({0}/{1} methods)", method.baseCount, method.diffCount);
+                    }
+
                     Console.WriteLine();
                 }
             }
@@ -427,16 +445,25 @@ namespace ManagedCodeGen
                 foreach (var method in sortedMethodImprovements.GetRange(0, Math.Min(methodImprovementCount, requestedCount)))
                 {
                     Console.Write("    {2,8} : {0} - {1}", method.path, method.name, method.deltaBytes);
-                    if (method.count > 1)
+
+                    if (method.baseCount == method.diffCount)
                     {
-                        Console.Write(" ({0} methods)", method.count);
+                        if (method.baseCount > 1)
+                        {
+                            Console.Write(" ({0} methods)", method.baseCount);
+                        }
                     }
+                    else
+                    {
+                        Console.Write(" ({0}/{1} methods)", method.baseCount, method.diffCount);
+                    }
+
                     Console.WriteLine();
                 }
             }
 
-            Console.WriteLine("\n{0} total methods with size differences ({1} improved, {2} regressed).",
-                sortedMethodCount, methodImprovementCount, methodRegressionCount);
+            Console.WriteLine("\n{0} total methods with size differences ({1} improved, {2} regressed), {3} unchanged.",
+                sortedMethodCount, methodImprovementCount, methodRegressionCount, unchangedMethodCount);
 
             return Math.Abs(totalDiffBytes);
         }

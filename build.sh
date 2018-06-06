@@ -5,24 +5,25 @@
 ## tools in <script_root>/bin.
 ## 
 ## If frameworks (-f) are requested the script will create a scratch empty 'app'
-## publish that contains the default frameworks.  See ./src/packages/project.json
-## for specific version numbers.
+## publish that contains the default frameworks.
 
 function usage
 {
     echo ""
-    echo "build.sh [-b <BUILD TYPE>] [-f] [-h] [-p]"
+    echo "build.sh [-b <BUILD TYPE>] [-f] [-h] [-p] [-t <TARGET>]"
     echo ""
     echo "    -b <BUILD TYPE> : Build type, can be Debug or Release."
     echo "    -h              : Show this message."
     echo "    -f              : Install default framework directory in <script_root>/fx."
     echo "    -p              : Publish utilities."
+    echo "    -t <TARGET>     : Target framework. Default is netcoreapp2.0."
     echo ""
 }
 
 # defaults
 buildType="Release"
 publish=false
+tfm=netcoreapp2.1
 workingDir="$PWD"
 cd "`dirname \"$0\"`"
 scriptDir="$PWD"
@@ -32,8 +33,8 @@ platform="`dotnet --info | awk '/RID/ {print $2}'`"
 appInstallDir="$scriptDir/bin"
 fxInstallDir="$scriptDir/fx"
 
-# process for '-h', '-p', 'f', and '-b <arg>'
-while getopts "hpfb:" opt; do
+# process for '-h', '-p', 'f', '-b <arg>', and '-t <arg>'
+while getopts "hpfbt:" opt; do
     case "$opt" in
     h)
         usage
@@ -48,20 +49,23 @@ while getopts "hpfb:" opt; do
     f)  
         fx=true
         ;;
+    t)
+        tfm=$OPTARG
+        ;;
     esac
 done
 
 # declare the array of projects   
-declare -a projects=(jit-dasm jit-diff jit-analyze jit-format cijobs)
+declare -a projects=(jit-dasm jit-diff jit-analyze jit-format cijobs pmi)
 
 # for each project either build or publish
 for proj in "${projects[@]}"
 do
     if [ "$publish" == true ]; then
-        dotnet publish -c $buildType -o $appInstallDir ./src/$proj
+        dotnet publish -c $buildType -f $tfm -o $appInstallDir ./src/$proj
         cp ./wrapper.sh $appInstallDir/$proj
     else
-        dotnet build -c $buildType ./src/$proj
+        dotnet build -c $buildType -f $tfm ./src/$proj
     fi
 done
 
@@ -72,7 +76,7 @@ if [ "$fx" == true ]; then
     # for subsequent publish to be able to accept --runtime parameter to publish
     # it as standalone.
     dotnet restore --runtime $platform ./src/packages
-    dotnet publish -c $buildType -o $fxInstallDir --runtime $platform ./src/packages
+    dotnet publish -c $buildType -f $tfm -o $fxInstallDir --runtime $platform ./src/packages
 
     # remove package version of mscorlib* - refer to core root version for diff testing.
     rm -f $fxInstallDir/mscorlib*

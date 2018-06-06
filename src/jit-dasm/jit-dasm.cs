@@ -36,10 +36,10 @@ namespace ManagedCodeGen
     public class Config
     {
         private ArgumentSyntax _syntaxResult;
+        private string _altjit = null;
         private string _crossgenExe = null;
         private string _jitPath = null;
         private string _rootPath = null;
-        private string _tag = null;
         private string _fileName = null;
         private IReadOnlyList<string> _assemblyList = Array.Empty<string>();
         private bool _wait = false;
@@ -53,10 +53,10 @@ namespace ManagedCodeGen
         {
             _syntaxResult = ArgumentSyntax.Parse(args, syntax =>
             {
+                syntax.DefineOption("altjit", ref _altjit, "If set, the name of the altjit to use (e.g., protononjit.dll).");
                 syntax.DefineOption("c|crossgen", ref _crossgenExe, "The crossgen compiler exe.");
                 syntax.DefineOption("j|jit", ref _jitPath, "The full path to the jit library.");
                 syntax.DefineOption("o|output", ref _rootPath, "The output path.");
-                syntax.DefineOption("t|tag", ref _tag, "Name of root in output directory.  Allows for many sets of output.");
                 syntax.DefineOption("f|file", ref _fileName, "Name of file to take list of assemblies from. Both a file and assembly list can be used.");
                 syntax.DefineOption("gcinfo", ref _dumpGCInfo, "Add GC info to the disasm output.");
                 syntax.DefineOption("v|verbose", ref _verbose, "Enable verbose output.");
@@ -76,16 +76,14 @@ namespace ManagedCodeGen
 
             // Run validation code on parsed input to ensure we have a sensible scenario.
 
-            validate();
+            Validate();
         }
 
         // Validate arguments
         //
-        // Pass a single tool as --crossgen. Optionally tag the result
-        // directory with a user supplied tag, and optionally specify
-        // a jit for crossgen to use.
+        // Pass a single tool as --crossgen. Optionally specify a jit for crossgen to use.
         //
-        private void validate()
+        private void Validate()
         {
             if (_crossgenExe == null)
             {
@@ -138,19 +136,17 @@ namespace ManagedCodeGen
         }
 
         public bool HasUserAssemblies { get { return AssemblyList.Count > 0; } }
-        public bool DoFileOutput { get { return (this.RootPath != null); } }
         public bool WaitForDebugger { get { return _wait; } }
         public bool UseJitPath { get { return (_jitPath != null); } }
-        public bool HasTag { get { return (_tag != null); } }
         public bool Recursive { get { return _recursive; } }
         public bool UseFileName { get { return (_fileName != null); } }
         public bool DumpGCInfo { get { return _dumpGCInfo; } }
         public bool DoVerboseOutput { get { return _verbose; } }
         public string CrossgenExecutable { get { return _crossgenExe; } }
         public string JitPath { get { return _jitPath; } }
+        public string AltJit { get { return _altjit; } }
         public string RootPath { get { return _rootPath; } }
         public IReadOnlyList<string> PlatformPaths { get { return _platformPaths; } }
-        public string Tag { get { return _tag; } }
         public string FileName { get { return _fileName; } }
         public IReadOnlyList<string> AssemblyList { get { return _assemblyList; } }
     }
@@ -188,22 +184,9 @@ namespace ManagedCodeGen
             
             // The disasm engine encapsulates a particular set of diffs.  An engine is
             // produced with a given code generator and assembly list, which then produces
-            // a set of disasm outputs
+            // a set of disasm outputs.
 
-            string taggedPath = null;
-            if (config.DoFileOutput)
-            {
-                if (config.HasTag)
-                {
-                    taggedPath = Path.Combine(config.RootPath, config.Tag);
-                }
-                else
-                {
-                    taggedPath = config.RootPath;
-                }
-            }
-            
-            DisasmEngine crossgenDisasm = new DisasmEngine(config.CrossgenExecutable, config, taggedPath, assemblyWorkList);
+            DisasmEngine crossgenDisasm = new DisasmEngine(config.CrossgenExecutable, config, config.RootPath, assemblyWorkList);
             crossgenDisasm.GenerateAsm();
             
             if (crossgenDisasm.ErrorCount > 0)
@@ -308,35 +291,6 @@ namespace ManagedCodeGen
             return assemblyInfoList;
         }
 
-        // Check to see if the passed filePath is to an assembly.
-        private static bool IsAssembly(string filePath)
-        {
-            try
-            {
-                System.Reflection.AssemblyName diffAssembly =
-                    System.Runtime.Loader.AssemblyLoadContext.GetAssemblyName(filePath);
-            }
-            catch (System.IO.FileNotFoundException)
-            {
-                // File not found - not an assembly
-                // TODO - should we log this case?
-                return false;
-            }
-            catch (System.BadImageFormatException)
-            {
-                // Explictly not an assembly.
-                return false;
-            }
-            catch (System.IO.FileLoadException)
-            {
-                // This is an assembly but it just happens to be loaded.
-                // (leave true in so as not to rely on fallthrough)
-                return true;
-            }
-
-            return true;
-        }
-
         // Recursivly search for assemblies from a root path.
         private static List<AssemblyInfo> IdentifyAssemblies(string rootPath, Config config)
         {
@@ -348,8 +302,7 @@ namespace ManagedCodeGen
             // Get files that could be assemblies, but discard currently
             // ngen'd assemblies.
             var subFiles = Directory.EnumerateFiles(rootPath, "*", searchOption)
-                .Where(s => (s.EndsWith(".exe") || s.EndsWith(".dll"))
-                    && !s.Contains(".ni."));
+                .Where(s => (s.EndsWith(".exe") || s.EndsWith(".dll")) && !s.Contains(".ni."));
 
             foreach (var filePath in subFiles)
             {
@@ -359,7 +312,7 @@ namespace ManagedCodeGen
                 }
 
                 // skip if not an assembly
-                if (!IsAssembly(filePath))
+                if (!Utility.IsAssembly(filePath))
                 {
                     continue;
                 }
@@ -389,6 +342,7 @@ namespace ManagedCodeGen
             private string _rootPath = null;
             private IReadOnlyList<string> _platformPaths;
             private string _jitPath = null;
+            private string _altjit = null;
             private List<AssemblyInfo> _assemblyInfoList;
             public bool doGCDump = false;
             public bool verbose = false;
@@ -404,6 +358,7 @@ namespace ManagedCodeGen
                 _rootPath = outputPath;
                 _platformPaths = config.PlatformPaths;
                 _jitPath = config.JitPath;
+                _altjit = config.AltJit;
                 _assemblyInfoList = assemblyInfoList;
 
                 this.doGCDump = config.DumpGCInfo;
@@ -436,6 +391,9 @@ namespace ManagedCodeGen
                     // includes a full path to the generated .ni.dll file, which makes all base/diff
                     // asm files appear to have diffs.
                     commandArgs.Insert(0, "/silent");
+                    // Also pass /nologo to avoid spurious diffs that sometimes appear when errors
+                    // occur (sometimes the logo lines and error lines are interleaved).
+                    commandArgs.Insert(0, "/nologo");
 
                     // Set jit path if it's defined.
                     if (_jitPath != null)
@@ -444,7 +402,7 @@ namespace ManagedCodeGen
                         commandArgs.Insert(1, _jitPath);
                     }
                     
-                    // Set platform assermbly path if it's defined.
+                    // Set platform assembly path if it's defined.
                     if (_platformPaths.Count > 0)
                     {
                         commandArgs.Insert(0, "/Platform_Assemblies_Paths");
@@ -500,6 +458,18 @@ namespace ManagedCodeGen
                     if (this.doGCDump)
                     {
                         generateCmd.EnvironmentVariable("COMPlus_NgenGCDump", "*");
+                    }
+
+                    if (this._altjit != null)
+                    {
+                        generateCmd.EnvironmentVariable("COMPlus_AltJit", "*");
+                        generateCmd.EnvironmentVariable("COMPlus_AltJitNgen", "*");
+                        generateCmd.EnvironmentVariable("COMPlus_AltJitName", _altjit);
+
+                        if (this.verbose)
+                        {
+                            Console.WriteLine("Setting AltJit for {0}", _altjit);
+                        }
                     }
 
                     if (this.verbose)
